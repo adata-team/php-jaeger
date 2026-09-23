@@ -1,0 +1,54 @@
+{
+    "name": "adata/laravel-jaeger",
+    "description": "Laravel/Lumen wrapper for Jaeger distributed tracing. PHP 7.3 compatible.",
+    "type": "library",
+    "keywords": ["laravel", "lumen", "jaeger", "opentracing", "tracing", "php7.3"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Arman",
+            "email": "21964@adata.kz"
+        }
+    ],
+    "require": {
+        "php": "^7.3|^8.0",
+        "ext-json": "*",
+        "jonahgeorge/jaeger-client-php": "^1.0",
+        "opentracing/opentracing": "^1.0",
+        "illuminate/support": "^8.0",
+        "illuminate/contracts": "^8.0",
+        "illuminate/http": "^8.0",
+        "illuminate/console": "^8.0",
+        "illuminate/database": "^8.0",
+        "illuminate/queue": "^8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.0",
+        "orchestra/testbench": "^6.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Adata\\LaravelJaeger\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Adata\\LaravelJaeger\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Adata\\LaravelJaeger\\LaravelJaegerServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
