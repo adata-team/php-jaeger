@@ -5,7 +5,6 @@ namespace Adata\LaravelJaeger;
 use Jaeger\Config;
 use OpenTracing\Formats;
 use OpenTracing\GlobalTracer;
-use OpenTracing\Reference;
 use OpenTracing\Span;
 use OpenTracing\SpanContext;
 use OpenTracing\Tracer;
@@ -51,13 +50,9 @@ class Jaeger
 
         $parent = $this->getCurrentSpan();
         if ($parent !== null) {
-            $options['references'] = [
-                Reference::create(Reference::CHILD_OF, $parent->getContext()),
-            ];
+            $options['child_of'] = $parent->getContext();
         } elseif ($this->serverContext !== null) {
-            $options['references'] = [
-                Reference::create(Reference::CHILD_OF, $this->serverContext),
-            ];
+            $options['child_of'] = $this->serverContext;
         }
 
         $span = $this->tracer->startSpan($name, $options);
@@ -128,13 +123,9 @@ class Jaeger
 
         $parent = $this->getCurrentSpan();
         if ($parent !== null) {
-            $options['references'] = [
-                Reference::create(Reference::CHILD_OF, $parent->getContext()),
-            ];
+            $options['child_of'] = $parent->getContext();
         } elseif ($this->serverContext !== null) {
-            $options['references'] = [
-                Reference::create(Reference::CHILD_OF, $this->serverContext),
-            ];
+            $options['child_of'] = $this->serverContext;
         }
 
         $span = $this->tracer->startSpan($name, $options);
