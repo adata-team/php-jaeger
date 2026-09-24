@@ -24,42 +24,61 @@ class JaegerMiddleware
      */
     public function handle($request, Closure $next)
     {
-        if ($this->shouldSkip($request)) {
+        // Pre-request tracing. Never let a tracing failure block the app —
+        // if setup throws, run the handler without a span.
+        $operation = null;
+        try {
+            if ($this->shouldSkip($request)) {
+                return $next($request);
+            }
+
+            $this->jaeger->initServerContext($request->server->all());
+
+            $operation = $request->method() . ' ' . $this->route($request);
+            $this->jaeger->start($operation, [
+                'http.method' => $request->method(),
+                'http.url'    => $request->fullUrl(),
+                'http.path'   => $request->path(),
+                'http.ip'     => (string) $request->ip(),
+            ]);
+        } catch (Throwable $e) {
             return $next($request);
         }
 
-        $this->jaeger->initServerContext($request->server->all());
-
-        $operation = $request->method() . ' ' . $this->route($request);
-
-        $this->jaeger->start($operation, [
-            'http.method' => $request->method(),
-            'http.url'    => $request->fullUrl(),
-            'http.path'   => $request->path(),
-            'http.ip'     => (string) $request->ip(),
-        ]);
-
+        // Run the app. Business exceptions must propagate; only tracing
+        // side-effects around them are best-effort.
         try {
             /** @var Response $response */
             $response = $next($request);
         } catch (Throwable $e) {
-            $this->jaeger->stop($operation, [
-                'error'         => true,
-                'error.message' => $e->getMessage(),
-                'error.class'   => get_class($e),
-            ]);
+            try {
+                if ($operation !== null) {
+                    $this->jaeger->stop($operation, [
+                        'error'         => true,
+                        'error.message' => $e->getMessage(),
+                        'error.class'   => get_class($e),
+                    ]);
+                }
+                $this->jaeger->finish();
+            } catch (Throwable $trErr) {
+                // ignore tracing error while re-throwing the business one
+            }
             throw $e;
         }
 
-        $status = method_exists($response, 'getStatusCode') ? (int) $response->getStatusCode() : 0;
-
-        $this->jaeger->stop($operation, [
-            'http.status_code' => $status,
-        ]);
-
-        // Lumen has no Application::terminating(); flush here so spans don't
-        // rely on the tracer's __destruct() firing at an unpredictable time.
-        $this->jaeger->finish();
+        // Post-request tracing. Same rule: swallow tracing errors.
+        try {
+            $status = method_exists($response, 'getStatusCode') ? (int) $response->getStatusCode() : 0;
+            if ($operation !== null) {
+                $this->jaeger->stop($operation, ['http.status_code' => $status]);
+            }
+            // Lumen has no Application::terminating(); flush here so spans
+            // don't rely on Jaeger::__destruct() firing at an unpredictable
+            // time.
+            $this->jaeger->finish();
+        } catch (Throwable $e) {
+            // swallow
+        }
 
         return $response;
     }
@@ -70,14 +89,18 @@ class JaegerMiddleware
      */
     private function shouldSkip(Request $request)
     {
-        $patterns = (array) config('jaeger.exclude_paths', []);
-        if (empty($patterns)) {
+        try {
+            $patterns = (array) config('jaeger.exclude_paths', []);
+            if (empty($patterns)) {
+                return false;
+            }
+
+            // Request::is() supports '*' wildcards and matches without the
+            // leading slash, so both 'health' and 'api/v1/metrics/*' work.
+            return call_user_func_array([$request, 'is'], $patterns);
+        } catch (Throwable $e) {
             return false;
         }
-
-        // Request::is() supports '*' wildcards and matches without the
-        // leading slash, so both 'health' and 'api/v1/metrics/*' work.
-        return call_user_func_array([$request, 'is'], $patterns);
     }
 
     /**

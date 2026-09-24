@@ -5,6 +5,7 @@ namespace Adata\LaravelJaeger;
 use Jaeger\Config;
 use OpenTracing\Formats;
 use OpenTracing\GlobalTracer;
+use OpenTracing\NoopTracer;
 use OpenTracing\Span;
 use OpenTracing\SpanContext;
 use OpenTracing\Tracer;
@@ -12,6 +13,12 @@ use SplDoublyLinkedList;
 use SplStack;
 use Throwable;
 
+/**
+ * All public methods are best-effort: any exception raised by the underlying
+ * tracer or reporter is swallowed so tracing outages can never break the
+ * hosting application. On construction failure the class falls back to a
+ * no-op tracer and every subsequent call becomes a silent no-op.
+ */
 class Jaeger
 {
     /** @var Tracer */
@@ -26,13 +33,23 @@ class Jaeger
     /** @var bool */
     private $isFinished = false;
 
-    public function __construct(Config $config)
+    public function __construct(Config $config = null)
     {
-        $config->initializeTracer();
-        $this->tracer = GlobalTracer::get();
-
         $this->spans = new SplStack();
         $this->spans->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO | SplDoublyLinkedList::IT_MODE_KEEP);
+
+        if ($config === null) {
+            $this->tracer = new NoopTracer();
+            return;
+        }
+
+        try {
+            $config->initializeTracer();
+            $this->tracer = GlobalTracer::get();
+        } catch (Throwable $e) {
+            // Agent DNS lookup / config errors / etc. must not kill the app.
+            $this->tracer = new NoopTracer();
+        }
     }
 
     /**
@@ -46,19 +63,23 @@ class Jaeger
      */
     public function start($name, array $tags = [])
     {
-        $options = ['tags' => $tags];
+        try {
+            $options = ['tags' => $tags];
 
-        $parent = $this->getCurrentSpan();
-        if ($parent !== null) {
-            $options['child_of'] = $parent->getContext();
-        } elseif ($this->serverContext !== null) {
-            $options['child_of'] = $this->serverContext;
+            $parent = $this->getCurrentSpan();
+            if ($parent !== null) {
+                $options['child_of'] = $parent->getContext();
+            } elseif ($this->serverContext !== null) {
+                $options['child_of'] = $this->serverContext;
+            }
+
+            $span = $this->tracer->startSpan($name, $options);
+            $this->spans->push($span);
+
+            return $span;
+        } catch (Throwable $e) {
+            return null;
         }
-
-        $span = $this->tracer->startSpan($name, $options);
-        $this->spans->push($span);
-
-        return $span;
     }
 
     /**
@@ -71,33 +92,37 @@ class Jaeger
      */
     public function stop($name, array $tags = [])
     {
-        if ($this->spans->isEmpty()) {
-            return;
-        }
-
-        $keep = [];
-        $found = false;
-
-        // Pop LIFO, drop the first match, keep the rest in original order.
-        while (!$this->spans->isEmpty()) {
-            /** @var Span $span */
-            $span = $this->spans->pop();
-
-            if (!$found && $span->getOperationName() === $name) {
-                foreach ($tags as $k => $v) {
-                    $span->setTag($k, $v);
-                }
-                $span->finish();
-                $found = true;
-                continue;
+        try {
+            if ($this->spans->isEmpty()) {
+                return;
             }
 
-            $keep[] = $span;
-        }
+            $keep = [];
+            $found = false;
 
-        // Restore surviving spans back onto the stack in original order.
-        for ($i = count($keep) - 1; $i >= 0; $i--) {
-            $this->spans->push($keep[$i]);
+            // Pop LIFO, drop the first match, keep the rest in original order.
+            while (!$this->spans->isEmpty()) {
+                /** @var Span $span */
+                $span = $this->spans->pop();
+
+                if (!$found && $span->getOperationName() === $name) {
+                    foreach ($tags as $k => $v) {
+                        try { $span->setTag($k, $v); } catch (Throwable $e) {}
+                    }
+                    try { $span->finish(); } catch (Throwable $e) {}
+                    $found = true;
+                    continue;
+                }
+
+                $keep[] = $span;
+            }
+
+            // Restore surviving spans back onto the stack in original order.
+            for ($i = count($keep) - 1; $i >= 0; $i--) {
+                $this->spans->push($keep[$i]);
+            }
+        } catch (Throwable $e) {
+            // swallow
         }
     }
 
@@ -113,23 +138,27 @@ class Jaeger
      */
     public function startStop($name, $durationMs, array $tags = [])
     {
-        $endMicros = (int) (microtime(true) * 1000000);
-        $startMicros = $endMicros - (int) ($durationMs * 1000);
+        try {
+            $endMicros = (int) (microtime(true) * 1000000);
+            $startMicros = $endMicros - (int) ($durationMs * 1000);
 
-        $options = [
-            'tags' => $tags,
-            'start_time' => $startMicros,
-        ];
+            $options = [
+                'tags' => $tags,
+                'start_time' => $startMicros,
+            ];
 
-        $parent = $this->getCurrentSpan();
-        if ($parent !== null) {
-            $options['child_of'] = $parent->getContext();
-        } elseif ($this->serverContext !== null) {
-            $options['child_of'] = $this->serverContext;
+            $parent = $this->getCurrentSpan();
+            if ($parent !== null) {
+                $options['child_of'] = $parent->getContext();
+            } elseif ($this->serverContext !== null) {
+                $options['child_of'] = $this->serverContext;
+            }
+
+            $span = $this->tracer->startSpan($name, $options);
+            $span->finish($endMicros);
+        } catch (Throwable $e) {
+            // swallow
         }
-
-        $span = $this->tracer->startSpan($name, $options);
-        $span->finish($endMicros);
     }
 
     /**
@@ -145,7 +174,14 @@ class Jaeger
     public function startWithInject($name, array $tags, array &$carrier)
     {
         $span = $this->start($name, $tags);
-        $this->tracer->inject($span->getContext(), Formats\TEXT_MAP, $carrier);
+        if ($span === null) {
+            return null;
+        }
+        try {
+            $this->tracer->inject($span->getContext(), Formats\TEXT_MAP, $carrier);
+        } catch (Throwable $e) {
+            // swallow — span exists, just no propagation
+        }
 
         return $span;
     }
@@ -158,11 +194,15 @@ class Jaeger
      */
     public function inject(array &$carrier)
     {
-        $span = $this->getCurrentSpan();
-        if ($span === null) {
-            return;
+        try {
+            $span = $this->getCurrentSpan();
+            if ($span === null) {
+                return;
+            }
+            $this->tracer->inject($span->getContext(), Formats\TEXT_MAP, $carrier);
+        } catch (Throwable $e) {
+            // swallow
         }
-        $this->tracer->inject($span->getContext(), Formats\TEXT_MAP, $carrier);
     }
 
     /**
@@ -173,12 +213,16 @@ class Jaeger
      */
     public function addTags(array $tags)
     {
-        $span = $this->getCurrentSpan();
-        if ($span === null) {
-            return;
-        }
-        foreach ($tags as $k => $v) {
-            $span->setTag($k, $v);
+        try {
+            $span = $this->getCurrentSpan();
+            if ($span === null) {
+                return;
+            }
+            foreach ($tags as $k => $v) {
+                try { $span->setTag($k, $v); } catch (Throwable $e) {}
+            }
+        } catch (Throwable $e) {
+            // swallow
         }
     }
 

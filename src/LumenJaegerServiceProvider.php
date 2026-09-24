@@ -38,20 +38,26 @@ class LumenJaegerServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/jaeger.php', 'jaeger');
 
         $this->app->singleton(Jaeger::class, function ($app) {
-            $cfg = $app['config']->get('jaeger');
+            try {
+                $cfg = $app['config']->get('jaeger');
 
-            $options = [
-                'sampler'       => $cfg['sampler'],
-                'local_agent'   => $cfg['local_agent'],
-                'dispatch_mode' => $cfg['dispatch_mode'],
-            ];
-            if (!empty($cfg['tags'])) {
-                $options['tags'] = $cfg['tags'];
+                $options = [
+                    'sampler'       => $cfg['sampler'],
+                    'local_agent'   => $cfg['local_agent'],
+                    'dispatch_mode' => $cfg['dispatch_mode'],
+                ];
+                if (!empty($cfg['tags'])) {
+                    $options['tags'] = $cfg['tags'];
+                }
+
+                $config = new Config($options, $cfg['name']);
+
+                return new Jaeger($config);
+            } catch (\Throwable $e) {
+                // Config building failed — return a no-op tracer so callers
+                // that inject Jaeger still work.
+                return new Jaeger(null);
             }
-
-            $config = new Config($options, $cfg['name']);
-
-            return new Jaeger($config);
         });
     }
 
