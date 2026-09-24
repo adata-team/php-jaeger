@@ -44,6 +44,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Excluded paths
+    |--------------------------------------------------------------------------
+    | Request paths that JaegerMiddleware should skip (no span created, no
+    | trace context extracted). Patterns are matched via Request::is(), so
+    | wildcards work: 'health', 'metrics/*', 'api/v1/ping'. Supply as an
+    | array or a comma-separated JAEGER_EXCLUDE_PATHS env value.
+    */
+    'exclude_paths' => array_values(array_filter(array_map('trim', explode(
+        ',',
+        env('JAEGER_EXCLUDE_PATHS', '')
+    )))),
+
+    /*
+    |--------------------------------------------------------------------------
     | Listeners
     |--------------------------------------------------------------------------
     | All listeners are disabled by default. Enable via env or override

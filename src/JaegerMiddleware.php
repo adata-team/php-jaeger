@@ -24,6 +24,10 @@ class JaegerMiddleware
      */
     public function handle($request, Closure $next)
     {
+        if ($this->shouldSkip($request)) {
+            return $next($request);
+        }
+
         $this->jaeger->initServerContext($request->server->all());
 
         $operation = $request->method() . ' ' . $this->route($request);
@@ -58,6 +62,22 @@ class JaegerMiddleware
         $this->jaeger->finish();
 
         return $response;
+    }
+
+    /**
+     * @param Request $request
+     * @return bool
+     */
+    private function shouldSkip(Request $request)
+    {
+        $patterns = (array) config('jaeger.exclude_paths', []);
+        if (empty($patterns)) {
+            return false;
+        }
+
+        // Request::is() supports '*' wildcards and matches without the
+        // leading slash, so both 'health' and 'api/v1/metrics/*' work.
+        return call_user_func_array([$request, 'is'], $patterns);
     }
 
     /**
