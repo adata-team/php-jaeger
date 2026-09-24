@@ -1,5 +1,5 @@
 {
-    "name": "adata/php-jaeger",
+    "name": "adata-team/php-jaeger",
     "description": "Laravel/Lumen wrapper for Jaeger distributed tracing. PHP 7.3 compatible.",
     "type": "library",
     "keywords": ["laravel", "lumen", "jaeger", "opentracing", "tracing", "php7.3"],
