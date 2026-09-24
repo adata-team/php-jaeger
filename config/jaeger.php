@@ -44,6 +44,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Process tags
+    |--------------------------------------------------------------------------
+    | Attached to every span as process metadata (shown under Process in the
+    | Jaeger UI). Empty values are stripped. In Kubernetes, POD_NAME etc. are
+    | typically injected via the Downward API in your deployment manifest.
+    */
+    'tags' => array_filter([
+        'hostname'      => gethostname() ?: null,
+        'pod.name'      => env('POD_NAME'),
+        'pod.namespace' => env('POD_NAMESPACE'),
+        'pod.ip'        => env('POD_IP'),
+        'node.name'     => env('NODE_NAME'),
+    ], function ($v) { return $v !== null && $v !== ''; }),
+
+    /*
+    |--------------------------------------------------------------------------
     | Excluded paths
     |--------------------------------------------------------------------------
     | Request paths that JaegerMiddleware should skip (no span created, no

@@ -28,14 +28,16 @@ class LaravelJaegerServiceProvider extends ServiceProvider
         $this->app->singleton(Jaeger::class, function ($app) {
             $cfg = $app['config']->get('jaeger');
 
-            $config = new Config(
-                [
-                    'sampler'       => $cfg['sampler'],
-                    'local_agent'   => $cfg['local_agent'],
-                    'dispatch_mode' => $cfg['dispatch_mode'],
-                ],
-                $cfg['name']
-            );
+            $options = [
+                'sampler'       => $cfg['sampler'],
+                'local_agent'   => $cfg['local_agent'],
+                'dispatch_mode' => $cfg['dispatch_mode'],
+            ];
+            if (!empty($cfg['tags'])) {
+                $options['tags'] = $cfg['tags'];
+            }
+
+            $config = new Config($options, $cfg['name']);
 
             return new Jaeger($config);
         });
