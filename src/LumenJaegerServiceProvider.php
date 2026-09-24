@@ -64,12 +64,16 @@ class LumenJaegerServiceProvider extends ServiceProvider
         $this->bootQuery($listeners);
         $this->bootJob($listeners);
 
-        // Lumen exposes terminating() the same way Laravel does.
-        $this->app->terminating(function () {
-            if ($this->app->resolved(Jaeger::class)) {
-                $this->app->make(Jaeger::class)->finish();
-            }
-        });
+        // Laravel's Application has terminating(); Lumen's does not. When
+        // running under Lumen the JaegerMiddleware flushes the tracer after
+        // the response, and Jaeger::__destruct() is a final safety net.
+        if (method_exists($this->app, 'terminating')) {
+            $this->app->terminating(function () {
+                if ($this->app->resolved(Jaeger::class)) {
+                    $this->app->make(Jaeger::class)->finish();
+                }
+            });
+        }
     }
 
     /**

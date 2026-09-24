@@ -53,6 +53,10 @@ class JaegerMiddleware
             'http.status_code' => $status,
         ]);
 
+        // Lumen has no Application::terminating(); flush here so spans don't
+        // rely on the tracer's __destruct() firing at an unpredictable time.
+        $this->jaeger->finish();
+
         return $response;
     }
 

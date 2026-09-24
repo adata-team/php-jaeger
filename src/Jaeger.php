@@ -166,6 +166,23 @@ class Jaeger
     }
 
     /**
+     * Attach tags to the currently active span. No-op if the stack is empty.
+     *
+     * @param array $tags
+     * @return void
+     */
+    public function addTags(array $tags)
+    {
+        $span = $this->getCurrentSpan();
+        if ($span === null) {
+            return;
+        }
+        foreach ($tags as $k => $v) {
+            $span->setTag($k, $v);
+        }
+    }
+
+    /**
      * @return Span|null
      */
     public function getCurrentSpan()

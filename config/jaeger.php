@@ -9,7 +9,7 @@ return [
     |--------------------------------------------------------------------------
     | Falls back to APP_NAME. Shown as the service in Jaeger UI.
     */
-    'name' => env('APP_NAME', 'Laravel'),
+    'name' => env('JAEGER_SERVICE_NAME', env('APP_NAME', 'Laravel')),
 
     /*
     |--------------------------------------------------------------------------
