@@ -41,6 +41,39 @@ class JaegerGuzzleMiddleware
     }
 
     /**
+     * Append Guzzle transfer-stat timings (DNS, connect, TTFB, total) as
+     * span tags. Values come from libcurl in seconds; we surface them in
+     * milliseconds as strings to sidestep the Zipkin numeric-tag bug.
+     *
+     * @param array $tags By reference — receives new *_ms keys.
+     * @param mixed $stats Guzzle TransferStats or null when not available.
+     * @return void
+     */
+    private static function mergeTransferTags(array &$tags, $stats)
+    {
+        if ($stats === null || !method_exists($stats, 'getHandlerStats')) {
+            return;
+        }
+        $handlerStats = $stats->getHandlerStats();
+        if (!is_array($handlerStats)) {
+            return;
+        }
+        $keys = [
+            'total_time'         => 'http.total_time_ms',
+            'namelookup_time'    => 'http.dns_time_ms',
+            'connect_time'       => 'http.connect_time_ms',
+            'appconnect_time'    => 'http.tls_time_ms',
+            'pretransfer_time'   => 'http.pretransfer_time_ms',
+            'starttransfer_time' => 'http.ttfb_ms',
+        ];
+        foreach ($keys as $curlKey => $tagName) {
+            if (isset($handlerStats[$curlKey]) && $handlerStats[$curlKey] > 0) {
+                $tags[$tagName] = (string) round($handlerStats[$curlKey] * 1000, 2);
+            }
+        }
+    }
+
+    /**
      * @param callable $handler
      * @return callable
      */
@@ -70,33 +103,46 @@ class JaegerGuzzleMiddleware
                 // never break the outgoing call because of tracing setup
             }
 
+            // Capture Guzzle transfer stats so we can break the total
+            // request duration into DNS / connect / TTFB / transfer phases.
+            $transferStats = null;
+            $originalOnStats = isset($options['on_stats']) ? $options['on_stats'] : null;
+            $options['on_stats'] = function ($stats) use (&$transferStats, $originalOnStats) {
+                $transferStats = $stats;
+                if (is_callable($originalOnStats)) {
+                    $originalOnStats($stats);
+                }
+            };
+
             $promise = $handler($request, $options);
 
             return $promise->then(
-                function (ResponseInterface $response) use ($operation, $jaeger) {
+                function (ResponseInterface $response) use ($operation, $jaeger, &$transferStats) {
                     try {
                         if ($operation !== null) {
                             // String-cast avoids Zipkin-compact-UDP integer
                             // serialization mismatch ('MjAw' parse errors).
-                            $jaeger->stop($operation, [
-                                'http.status_code' => (string) $response->getStatusCode(),
-                            ]);
+                            $tags = ['http.status_code' => (string) $response->getStatusCode()];
+                            self::mergeTransferTags($tags, $transferStats);
+                            $jaeger->stop($operation, $tags);
                         }
                     } catch (Throwable $e) {
                         // swallow
                     }
                     return $response;
                 },
-                function ($reason) use ($operation, $jaeger) {
+                function ($reason) use ($operation, $jaeger, &$transferStats) {
                     try {
                         if ($operation !== null) {
                             $msg = $reason instanceof Throwable ? $reason->getMessage() : (string) $reason;
                             $cls = $reason instanceof Throwable ? get_class($reason) : 'error';
-                            $jaeger->stop($operation, [
+                            $tags = [
                                 'error'         => true,
                                 'error.message' => $msg,
                                 'error.class'   => $cls,
-                            ]);
+                            ];
+                            self::mergeTransferTags($tags, $transferStats);
+                            $jaeger->stop($operation, $tags);
                         }
                     } catch (Throwable $e) {
                         // swallow

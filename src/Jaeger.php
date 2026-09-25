@@ -64,7 +64,7 @@ class Jaeger
     public function start($name, array $tags = [])
     {
         try {
-            $options = ['tags' => $tags];
+            $options = ['tags' => self::normalizeTags($tags)];
 
             $parent = $this->getCurrentSpan();
             if ($parent !== null) {
@@ -106,7 +106,7 @@ class Jaeger
                 $span = $this->spans->pop();
 
                 if (!$found && $span->getOperationName() === $name) {
-                    foreach ($tags as $k => $v) {
+                    foreach (self::normalizeTags($tags) as $k => $v) {
                         try { $span->setTag($k, $v); } catch (Throwable $e) {}
                     }
                     try { $span->finish(); } catch (Throwable $e) {}
@@ -143,7 +143,7 @@ class Jaeger
             $startMicros = $endMicros - (int) ($durationMs * 1000);
 
             $options = [
-                'tags' => $tags,
+                'tags' => self::normalizeTags($tags),
                 'start_time' => $startMicros,
             ];
 
@@ -218,12 +218,33 @@ class Jaeger
             if ($span === null) {
                 return;
             }
-            foreach ($tags as $k => $v) {
+            foreach (self::normalizeTags($tags) as $k => $v) {
                 try { $span->setTag($k, $v); } catch (Throwable $e) {}
             }
         } catch (Throwable $e) {
             // swallow
         }
+    }
+
+    /**
+     * jonahgeorge/jaeger-client-php + ZIPKIN_OVER_COMPACT_UDP silently
+     * miscodes integer and float tag values: they arrive at Jaeger as
+     * base64-encoded ASCII and the parser bails out ('Cannot parse Zipkin
+     * value MjAw: unexpected EOF'). String-encoding sidesteps the type
+     * mismatch and renders correctly in the UI. Booleans and non-scalars
+     * are passed through unchanged.
+     *
+     * @param array $tags
+     * @return array
+     */
+    private static function normalizeTags(array $tags)
+    {
+        foreach ($tags as $k => $v) {
+            if (is_int($v) || is_float($v)) {
+                $tags[$k] = (string) $v;
+            }
+        }
+        return $tags;
     }
 
     /**
