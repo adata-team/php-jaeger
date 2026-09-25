@@ -44,6 +44,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Flush threshold (tail-based sampling)
+    |--------------------------------------------------------------------------
+    | Ship a trace to the agent only if its root span lasted at least this
+    | many milliseconds. Fast, boring requests are dropped in memory. 0
+    | (default) keeps the old behavior — every trace is sent.
+    */
+    'flush_min_duration_ms' => (int) env('JAEGER_FLUSH_MIN_DURATION_MS', 0),
+
+    /*
+    |--------------------------------------------------------------------------
     | Process tags
     |--------------------------------------------------------------------------
     | Attached to every span as process metadata (shown under Process in the

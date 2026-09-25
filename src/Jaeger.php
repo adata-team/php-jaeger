@@ -2,6 +2,7 @@
 
 namespace Adata\LaravelJaeger;
 
+use Adata\LaravelJaeger\Reporter\ThresholdReporter;
 use Jaeger\Config;
 use OpenTracing\Formats;
 use OpenTracing\GlobalTracer;
@@ -9,6 +10,7 @@ use OpenTracing\NoopTracer;
 use OpenTracing\Span;
 use OpenTracing\SpanContext;
 use OpenTracing\Tracer;
+use ReflectionClass;
 use SplDoublyLinkedList;
 use SplStack;
 use Throwable;
@@ -33,10 +35,29 @@ class Jaeger
     /** @var bool */
     private $isFinished = false;
 
-    public function __construct(Config $config = null)
+    /** @var int */
+    private $flushMinDurationMs = 0;
+
+    /** @var int|null Microseconds since epoch when the root span opened. */
+    private $rootStartMicros = null;
+
+    /** @var ThresholdReporter|null Set only when threshold sampling is on. */
+    private $thresholdReporter = null;
+
+    /**
+     * @param Config|null $config             Null → pure no-op mode.
+     * @param int         $flushMinDurationMs Tail-based sampling threshold in
+     *                                        milliseconds. 0 (default) = flush
+     *                                        every trace. Positive = only flush
+     *                                        traces whose root span lasted at
+     *                                        least this long; others get
+     *                                        dropped at finish() time.
+     */
+    public function __construct(Config $config = null, $flushMinDurationMs = 0)
     {
         $this->spans = new SplStack();
         $this->spans->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO | SplDoublyLinkedList::IT_MODE_KEEP);
+        $this->flushMinDurationMs = (int) $flushMinDurationMs;
 
         if ($config === null) {
             $this->tracer = new NoopTracer();
@@ -46,9 +67,40 @@ class Jaeger
         try {
             $config->initializeTracer();
             $this->tracer = GlobalTracer::get();
+
+            if ($this->flushMinDurationMs > 0) {
+                $this->installThresholdReporter();
+            }
         } catch (Throwable $e) {
             // Agent DNS lookup / config errors / etc. must not kill the app.
             $this->tracer = new NoopTracer();
+        }
+    }
+
+    /**
+     * Swap the tracer's reporter with our buffering wrapper. Uses reflection
+     * because jaeger-client-php's Tracer keeps the reporter private and its
+     * Config factory doesn't expose a setter.
+     *
+     * @return void
+     */
+    private function installThresholdReporter()
+    {
+        try {
+            $ref = new ReflectionClass($this->tracer);
+            if (!$ref->hasProperty('reporter')) {
+                return;
+            }
+            $prop = $ref->getProperty('reporter');
+            $prop->setAccessible(true);
+            $inner = $prop->getValue($this->tracer);
+            if (!$inner instanceof \Jaeger\Reporter\ReporterInterface) {
+                return;
+            }
+            $this->thresholdReporter = new ThresholdReporter($inner);
+            $prop->setValue($this->tracer, $this->thresholdReporter);
+        } catch (Throwable $e) {
+            // Fall back to normal behavior on any reflection failure.
         }
     }
 
@@ -75,6 +127,10 @@ class Jaeger
 
             $span = $this->tracer->startSpan($name, $options);
             $this->spans->push($span);
+
+            if ($this->rootStartMicros === null) {
+                $this->rootStartMicros = (int) (microtime(true) * 1000000);
+            }
 
             return $span;
         } catch (Throwable $e) {
@@ -306,6 +362,20 @@ class Jaeger
                 $span->finish();
             } catch (Throwable $e) {
                 // ignore
+            }
+        }
+
+        // Tail-based sampling: if the root span was faster than the
+        // configured threshold, drop the whole trace instead of shipping
+        // it. Only fires when the ThresholdReporter was successfully
+        // installed in the constructor.
+        if ($this->thresholdReporter !== null
+            && $this->flushMinDurationMs > 0
+            && $this->rootStartMicros !== null) {
+            $elapsedMs = ((microtime(true) * 1000000) - $this->rootStartMicros) / 1000;
+            if ($elapsedMs < $this->flushMinDurationMs) {
+                $this->thresholdReporter->discard();
+                return;
             }
         }
 

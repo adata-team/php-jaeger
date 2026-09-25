@@ -40,7 +40,7 @@ class LaravelJaegerServiceProvider extends ServiceProvider
 
                 $config = new Config($options, $cfg['name']);
 
-                return new Jaeger($config);
+                return new Jaeger($config, (int) ($cfg['flush_min_duration_ms'] ?? 0));
             } catch (\Throwable $e) {
                 return new Jaeger(null);
             }
