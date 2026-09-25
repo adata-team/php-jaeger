@@ -35,12 +35,12 @@ class JaegerMiddleware
             $this->jaeger->initServerContext($request->server->all());
 
             $operation = $request->method() . ' ' . $this->route($request);
-            $this->jaeger->start($operation, array_merge([
+            $this->jaeger->start($operation, [
                 'http.method' => $request->method(),
                 'http.url'    => $request->fullUrl(),
                 'http.path'   => $request->path(),
                 'http.ip'     => (string) $request->ip(),
-            ], $this->routeMeta($request)));
+            ]);
         } catch (Throwable $e) {
             return $next($request);
         }
@@ -52,6 +52,10 @@ class JaegerMiddleware
             $response = $next($request);
         } catch (Throwable $e) {
             try {
+                $meta = $this->routeMeta($request);
+                if (!empty($meta)) {
+                    $this->jaeger->addTags($meta);
+                }
                 if ($operation !== null) {
                     $this->jaeger->stop($operation, [
                         'error'         => true,
@@ -68,6 +72,14 @@ class JaegerMiddleware
 
         // Post-request tracing. Same rule: swallow tracing errors.
         try {
+            // Route info is only bound to the request AFTER the router has
+            // dispatched inside $next(). Under Lumen a global middleware
+            // runs before dispatch, so we defer routeMeta() until here.
+            $meta = $this->routeMeta($request);
+            if (!empty($meta)) {
+                $this->jaeger->addTags($meta);
+            }
+
             $status = method_exists($response, 'getStatusCode') ? (string) $response->getStatusCode() : '0';
             if ($operation !== null) {
                 // Passed as string to work around a Zipkin-compact-UDP
