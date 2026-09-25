@@ -76,8 +76,10 @@ class JaegerGuzzleMiddleware
                 function (ResponseInterface $response) use ($operation, $jaeger) {
                     try {
                         if ($operation !== null) {
+                            // String-cast avoids Zipkin-compact-UDP integer
+                            // serialization mismatch ('MjAw' parse errors).
                             $jaeger->stop($operation, [
-                                'http.status_code' => (int) $response->getStatusCode(),
+                                'http.status_code' => (string) $response->getStatusCode(),
                             ]);
                         }
                     } catch (Throwable $e) {

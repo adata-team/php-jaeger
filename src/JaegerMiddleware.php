@@ -35,12 +35,12 @@ class JaegerMiddleware
             $this->jaeger->initServerContext($request->server->all());
 
             $operation = $request->method() . ' ' . $this->route($request);
-            $this->jaeger->start($operation, [
+            $this->jaeger->start($operation, array_merge([
                 'http.method' => $request->method(),
                 'http.url'    => $request->fullUrl(),
                 'http.path'   => $request->path(),
                 'http.ip'     => (string) $request->ip(),
-            ]);
+            ], $this->routeMeta($request)));
         } catch (Throwable $e) {
             return $next($request);
         }
@@ -68,8 +68,12 @@ class JaegerMiddleware
 
         // Post-request tracing. Same rule: swallow tracing errors.
         try {
-            $status = method_exists($response, 'getStatusCode') ? (int) $response->getStatusCode() : 0;
+            $status = method_exists($response, 'getStatusCode') ? (string) $response->getStatusCode() : '0';
             if ($operation !== null) {
+                // Passed as string to work around a Zipkin-compact-UDP
+                // serialization mismatch where integer tags come out as
+                // base64-encoded ASCII ('MjAw' for 200) and Jaeger fails
+                // to parse them.
                 $this->jaeger->stop($operation, ['http.status_code' => $status]);
             }
             // Lumen has no Application::terminating(); flush here so spans
@@ -101,6 +105,57 @@ class JaegerMiddleware
         } catch (Throwable $e) {
             return false;
         }
+    }
+
+    /**
+     * Pull route metadata (controller class, action method, route name) into
+     * span tags so the Jaeger UI shows which handler ran, not just the URI.
+     *
+     * @param Request $request
+     * @return array
+     */
+    private function routeMeta(Request $request)
+    {
+        try {
+            $route = $request->route();
+        } catch (Throwable $e) {
+            return [];
+        }
+
+        $meta = [];
+        $action = null;
+
+        if (is_object($route)) {
+            // Laravel: Route object.
+            if (method_exists($route, 'getActionName')) {
+                $action = (string) $route->getActionName();
+            }
+            if (method_exists($route, 'getName')) {
+                $name = $route->getName();
+                if (!empty($name)) {
+                    $meta['route.name'] = (string) $name;
+                }
+            }
+        } elseif (is_array($route) && isset($route[1]) && is_array($route[1])) {
+            // Lumen: [status, ['uses' => 'Foo@bar', 'as' => 'name'], params]
+            if (isset($route[1]['uses'])) {
+                $action = (string) $route[1]['uses'];
+            }
+            if (isset($route[1]['as'])) {
+                $meta['route.name'] = (string) $route[1]['as'];
+            }
+        }
+
+        if ($action !== null && $action !== '') {
+            $meta['route.action'] = $action;
+            if (strpos($action, '@') !== false) {
+                list($cls, $mtd) = explode('@', $action, 2);
+                $meta['route.controller'] = $cls;
+                $meta['route.method']     = $mtd;
+            }
+        }
+
+        return $meta;
     }
 
     /**
