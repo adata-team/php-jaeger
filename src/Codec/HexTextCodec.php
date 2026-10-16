@@ -53,7 +53,7 @@ class HexTextCodec extends TextCodec
      */
     public function inject(SpanContext $spanContext, &$carrier)
     {
-        $carrier[$this->traceIdHeader] = self::spanContextToString(
+        $carrier[$this->traceIdHeader] = self::encodeSpanContext(
             $spanContext->getTraceId(),
             $spanContext->getSpanId(),
             $spanContext->getParentId(),
@@ -72,20 +72,24 @@ class HexTextCodec extends TextCodec
     }
 
     /**
+     * Renamed from spanContextToString to avoid colliding with TextCodec's own
+     * private method of that name — PHP 8 rejects a private override that
+     * differs in static-ness even though private methods are not inherited.
+     *
      * @param int|string|null $traceId
      * @param int|string|null $spanId
      * @param int|string|null $parentId
      * @param int             $flags
      * @return string
      */
-    private static function spanContextToString($traceId, $spanId, $parentId, $flags)
+    private static function encodeSpanContext($traceId, $spanId, $parentId, $flags)
     {
         $parentId = $parentId ?? 0;
         return sprintf(
             '%s:%s:%s:%x',
-            self::toHex64($traceId),
-            self::toHex64($spanId),
-            self::toHex64($parentId),
+            self::normalizeIdToHex64($traceId),
+            self::normalizeIdToHex64($spanId),
+            self::normalizeIdToHex64($parentId),
             $flags
         );
     }
@@ -98,7 +102,7 @@ class HexTextCodec extends TextCodec
      * @param int|string|null $id
      * @return string
      */
-    private static function toHex64($id)
+    private static function normalizeIdToHex64($id)
     {
         if ($id === null || $id === '') {
             return '0000000000000000';
