@@ -81,6 +81,28 @@ class JaegerTest extends TestCase
         $this->jaeger->stop('rpc.call');
     }
 
+    /**
+     * Regression: without HexTextCodec installed over the stock codec, the
+     * trace-id component arrived decimal (e.g. '5498902247430173171') because
+     * randomId() in jonahgeorge/jaeger-client-php returns a decimal string.
+     * Downstream OTel then mis-parsed it as hex and PHP+Go ended up in
+     * separate traces.
+     */
+    public function testInjectEmitsHexTraceIdHeader()
+    {
+        $carrier = [];
+        $this->jaeger->startWithInject('rpc.call', [], $carrier);
+
+        $this->assertArrayHasKey('uber-trace-id', $carrier);
+        $parts = explode(':', $carrier['uber-trace-id']);
+        $this->assertCount(4, $parts, 'uber-trace-id must have four colon-separated parts');
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $parts[0], 'trace-id must be 16 lowercase hex chars');
+        $this->assertMatchesRegularExpression('/^[0-9a-f]+$/', $parts[1], 'span-id must be lowercase hex');
+        $this->assertMatchesRegularExpression('/^[0-9a-f]+$/', $parts[2], 'parent-id must be lowercase hex');
+
+        $this->jaeger->stop('rpc.call');
+    }
+
     public function testInjectOnEmptyStackIsSafe()
     {
         $carrier = ['x-existing' => 'keep'];

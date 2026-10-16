@@ -2,7 +2,9 @@
 
 namespace Adata\LaravelJaeger;
 
+use Adata\LaravelJaeger\Codec\HexTextCodec;
 use Adata\LaravelJaeger\Reporter\ThresholdReporter;
+use Jaeger\Codec\TextCodec;
 use Jaeger\Config;
 use OpenTracing\Formats;
 use OpenTracing\GlobalTracer;
@@ -68,6 +70,8 @@ class Jaeger
             $config->initializeTracer();
             $this->tracer = GlobalTracer::get();
 
+            $this->installHexTextCodec();
+
             if ($this->flushMinDurationMs > 0) {
                 $this->installThresholdReporter();
             }
@@ -75,6 +79,77 @@ class Jaeger
             // Agent DNS lookup / config errors / etc. must not kill the app.
             $this->tracer = new NoopTracer();
         }
+    }
+
+    /**
+     * Replace Tracer's TEXT_MAP / HTTP_HEADERS codecs with a hex-serializing
+     * variant. jaeger-client-php v1.5.x emits trace-id as a decimal string
+     * (randomId() returns `(string) random_int(...)` and TextCodec only
+     * hex-formats when `is_int` is true), which produces an uber-trace-id
+     * header downstream OTel/Jaeger consumers mis-parse as hex and route to
+     * a different trace. See HexTextCodec for the full story.
+     *
+     * @return void
+     */
+    private function installHexTextCodec()
+    {
+        try {
+            $ref = new ReflectionClass($this->tracer);
+            if (!$ref->hasProperty('codecs')) {
+                return;
+            }
+            $prop = $ref->getProperty('codecs');
+            $prop->setAccessible(true);
+            $codecs = $prop->getValue($this->tracer);
+            if (!is_array($codecs)) {
+                return;
+            }
+
+            foreach ([Formats\TEXT_MAP, Formats\HTTP_HEADERS] as $format) {
+                if (!isset($codecs[$format])) {
+                    continue;
+                }
+                $old = $codecs[$format];
+                if (!$old instanceof TextCodec || $old instanceof HexTextCodec) {
+                    continue;
+                }
+                $codecs[$format] = $this->rebuildAsHexCodec($old);
+            }
+
+            $prop->setValue($this->tracer, $codecs);
+        } catch (Throwable $e) {
+            // Reflection shape changed between client versions — leave the
+            // stock codec in place rather than crash the tracer.
+        }
+    }
+
+    /**
+     * Mirror the private config of an existing TextCodec into a HexTextCodec.
+     * The three names Tracer passes in are the only ones Config exposes; if
+     * they can't be read for some reason, fall back to the Jaeger defaults.
+     *
+     * @param TextCodec $old
+     * @return HexTextCodec
+     */
+    private function rebuildAsHexCodec(TextCodec $old)
+    {
+        $oldRef = new ReflectionClass($old);
+        $read = function ($name, $default) use ($oldRef, $old) {
+            if (!$oldRef->hasProperty($name)) {
+                return $default;
+            }
+            $p = $oldRef->getProperty($name);
+            $p->setAccessible(true);
+            $v = $p->getValue($old);
+            return $v === null ? $default : $v;
+        };
+
+        return new HexTextCodec(
+            (bool) $read('urlEncoding', false),
+            (string) $read('traceIdHeader', \Jaeger\TRACE_ID_HEADER),
+            (string) $read('baggagePrefix', \Jaeger\BAGGAGE_HEADER_PREFIX),
+            (string) $read('debugIdHeader', \Jaeger\DEBUG_ID_HEADER_KEY)
+        );
     }
 
     /**
