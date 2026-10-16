@@ -3,7 +3,7 @@
 namespace Adata\LaravelJaeger\Codec;
 
 use Jaeger\Codec\TextCodec;
-use OpenTracing\SpanContext;
+use Jaeger\SpanContext;
 
 use const Jaeger\BAGGAGE_HEADER_PREFIX;
 use const Jaeger\DEBUG_ID_HEADER_KEY;
